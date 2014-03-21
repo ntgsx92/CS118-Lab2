@@ -10,7 +10,6 @@
 #include "sr_router.h"
 #include "sr_if.h"
 #include "sr_protocol.h"
-#include "sr_protocol.h"
 
 /*
 Generate ICMP packet

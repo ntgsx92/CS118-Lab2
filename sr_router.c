@@ -32,6 +32,8 @@
  *
  *---------------------------------------------------------------------*/
 
+
+
 void sr_init(struct sr_instance* sr)
 {
     /* REQUIRES */
@@ -67,6 +69,26 @@ void sr_init(struct sr_instance* sr)
  * the method call.
  *
  *---------------------------------------------------------------------*/
+
+/* Since I saw that you did seperate ip packet to router and ip packet
+  to others, i created those two functions to handle different behaviors.
+  Feel free to remove those if you have already doen that*/
+/*void Handle_IP_To_Router(struct sr_instance* sr,
+                  uint8_t* packet
+                  unsigned int len,
+                  struct sr_if* iface){
+    /* Get all header first 
+    sr_ethernet_hdr_t* ether_header = (sr_ethernet_hdr_t*)packet;
+    sr_ip_hdr_t* ip_header = ()
+ }
+
+ void Handle_IP_TO_Others(struct sr_instance* sr,
+                  uint8_t* packet,
+                  unsigned int len,
+                  struct sr_if* iface){
+
+ }*/
+
 
 void sr_handlepacket(struct sr_instance* sr,
         uint8_t * packet/* lent */,
@@ -214,8 +236,57 @@ void process_ether_type_ip(struct sr_instance* sr,
         /* Drop DA packet*/
         printf("Non-PING ICMP packet sent to Router's interface. Dropping.\n");
       }
-    }   
-  } 
+    }
+    /*receive a TCP/UDP packet, send ICMP port unreachable back*/
+    else if(ip_header->ip_p == ip_protocol_tcp || ip_header->ip_p == ip_protocol_udp){
+        printf("Receiving TCP/UDP packet\n");
+
+        size_t tulen = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t);
+        uint8_t* send_packet = malloc(tulen);
+        sr_ethernet_hdr_t* new_ether_header = (sr_ethernet_hdr_t*)send_packet;
+        sr_ip_hdr_t* new_ip_header = (sr_ip_hdr_t*)(send_packet + sizeof(sr_ethernet_hdr_t));
+        sr_icmp_t3_hdr_t* new_icmp_header = (sr_icmp_t3_hdr_t*)(send_packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+
+        /*write ethernet header*/
+        memcpy(new_ether_header->ether_dhost, eth_header->ether_shost, 6);
+        memcpy(new_ether_header->ether_shost, pkt_interface->addr, 6);
+        new_ether_header->ether_type = htons(0x0800);
+
+        /*write ip header*/
+        new_ip_header->ip_hl = 5;
+        new_ip_header->ip_v = 4;
+        new_ip_header->ip_tos = ip_header->ip_tos;
+        new_ip_header->ip_len = htons(sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+        new_ip_header->ip_id = ip_header->ip_id;
+        new_ip_header->ip_off = 0;
+        new_ip_header->ip_ttl = 64;
+        new_ip_header->ip_p = ip_protocol_icmp;
+        new_ip_header->ip_sum = 0;
+        new_ip_header->ip_src = pkt_interface->ip;
+        new_ip_header->ip_dst = ip_header->ip_src;
+        new_ip_header->ip_sum = cksum(new_ip_header, sizeof(sr_ip_hdr_t));
+
+        /*write icmp header*/
+        new_icmp_header->icmp_type = 3;
+        new_icmp_header->icmp_code = 3;
+        new_icmp_header->icmp_sum = 0;
+        new_icmp_header->next_mtu = htons(512);
+        memcpy(new_icmp_header->data, ip_header, sizeof(sr_ip_hdr_t));
+        memcpy(new_icmp_header->data + sizeof(sr_ip_hdr_t), send_packet + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t), 8);
+        new_icmp_header->icmp_sum = cksum(send_packet + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t), sizeof(sr_icmp_t3_hdr_t));
+
+        printf("\nThis is what I am sending!\n\n");
+        print_hdrs(send_packet, tulen);
+
+        /*send packet*/
+        sr_send_packet(sr, send_packet, tulen, interface);
+        free(send_packet);
+        return;
+    } 
+    else{
+      printf("Unknown IP protocol number, Drop packet\n");
+    }    
+  }
 
   else 
   {
