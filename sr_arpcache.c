@@ -11,130 +11,17 @@
 #include "sr_if.h"
 #include "sr_protocol.h"
 
-/*
-Generate ICMP packet
-*/
-uint8_t *generate_icmp_message(struct sr_packet *cur_packet, struct sr_instance *sr){
-    size_t packet_size = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t);
-    uint8_t *newpacket = (uint8_t*)malloc(packet_size);
-    sr_ethernet_hdr_t *new_ethernet_header = (sr_ethernet_hdr_t*)(newpacket);
-    sr_ip_hdr_t* new_ip_header = (sr_ip_hdr_t*)(newpacket + sizeof(sr_ip_hdr_t));
-    sr_icmp_t3_hdr_t *new_icmp_header = (sr_icmp_t3_hdr_t*)(newpacket + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
-    /*set up ethernet header*/
-    sr_ethernet_hdr_t *req_ether_header = (sr_ethernet_hdr_t*)(cur_packet->buf); /*ethernet header from buffer*/
-    memcpy(new_ethernet_header->ether_shost, sr_get_interface(sr, cur_packet->iface)->addr, ETHER_ADDR_LEN);
-    memcpy(new_ethernet_header->ether_dhost, req_ether_header->ether_shost, ETHER_ADDR_LEN);
-    new_ethernet_header->ether_type = htons(ethertype_ip);
-    /*set up ip header*/
-    sr_ip_hdr_t *req_ip_header = (sr_ip_hdr_t*)(cur_packet->buf + sizeof(sr_ethernet_hdr_t)); /*ipv4 header from buffer*/
-    new_ip_header->ip_hl = 5; /*minimum value is 5*/
-    new_ip_header->ip_v = 4;
-    new_ip_header->ip_tos = req_ip_header->ip_tos;
-    new_ip_header->ip_len = htons(sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
-    new_ip_header->ip_off = 0; /*no fragment*/
-    new_ip_header->ip_ttl = 64; /* recommanded initial value for TTL */
-    new_ip_header->ip_p = ip_protocol_icmp;
-    new_ip_header->ip_p = 0;
-    new_ip_header->ip_sum = 0;
-    new_ip_header->ip_src = sr_get_interface(sr,cur_packet->iface)->ip;
-    new_ip_header->ip_dst = req_ip_header->ip_src;
-    new_ip_header->ip_sum = cksum(new_ip_header, sizeof(sr_ip_hdr_t));
-    /*set up type 3 icmp header*/
-    new_icmp_header->icmp_type = 3;
-    new_icmp_header->icmp_code = 1;
-    new_icmp_header->icmp_sum = 0;
-    new_icmp_header->next_mtu = 0;
-    /*we need IP header and first 8 bytes of original datagram's data*/
-    memcpy(new_icmp_header->data, req_ip_header, sizeof(sr_ip_hdr_t));
-    memcpy((new_icmp_header->data + sizeof(sr_ip_hdr_t)), (newpacket + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t)), 8);
-    new_icmp_header->icmp_sum = cksum(new_icmp_header->data + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t), sizeof(sr_icmp_t3_hdr_t));
-    return newpacket;
-}
-
-/*
-Generate arp request and return a new packet
-*/
-uint8_t *generate_arp_request(struct sr_arpreq *req, struct sr_if* cur_if){
-    size_t packet_size = sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t);
-    uint8_t *newpacket = malloc(packet_size);
-    sr_ethernet_hdr_t *new_ethernet_header = (sr_ethernet_hdr_t*)(newpacket);
-    sr_arp_hdr_t *new_arp_header = (sr_arp_hdr_t*)(newpacket + sizeof(sr_ethernet_hdr_t));
-    /*set ethernet header*/
-    memcpy(new_ethernet_header->ether_shost, cur_if->addr, ETHER_ADDR_LEN);
-    uint8_t broadcast_addr[ETHER_ADDR_LEN] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
-    memcpy(new_ethernet_header->ether_dhost, broadcast_addr, ETHER_ADDR_LEN);
-    new_ethernet_header->ether_type = htons(ethertype_arp);
-    /*set arp header*/
-    new_arp_header->ar_hrd = htons(arp_hrd_ethernet);
-    new_arp_header->ar_pro = htons(ethertype_ip);
-    new_arp_header->ar_hln = ETHER_ADDR_LEN; /*mac address length*/
-    new_arp_header->ar_pln = 4; /*ip address length( 4 for IPv4)*/
-    new_arp_header->ar_op = htons(arp_op_request);
-    memcpy(new_arp_header->ar_sha, cur_if->addr, ETHER_ADDR_LEN); /*sender hw address*/
-    new_arp_header->ar_sip = cur_if->ip;
-    memcpy(new_arp_header->ar_tha, broadcast_addr, ETHER_ADDR_LEN); /*target hw address*/
-    new_arp_header->ar_tip = req->ip;
-    /*DONE!*/
-    return newpacket;
-}
-
-
-/*
-   The handle_arpreq() function is a function you should write, and it should
-   handle sending ARP requests if necessary:
-
-   function handle_arpreq(req):
-       if difftime(now, req->sent) > 1.0
-           if req->times_sent >= 5:
-               send icmp host unreachable to source addr of all pkts waiting
-                 on this request
-               arpreq_destroy(req)
-           else:
-               send arp request
-               req->sent = now
-               req->times_sent++
-*/
-void handle_arpreq(struct sr_arpreq *req, struct sr_instance *sr){
-    time_t cur_time = time(NULL);
-    if((cur_time - req->sent) > 1){
-        /*send icmp host unreachable */
-        if(req->times_sent >= 5){
-            size_t icmp_size = sizeof(sr_arp_hdr_t) + sizeof(sr_ethernet_hdr_t) + sizeof(sr_icmp_t3_hdr_t);
-            struct sr_packet *cur_packet = req->packets;
-            while(cur_packet != NULL){
-                uint8_t *new_icmp_packet;
-                new_icmp_packet = generate_icmp_message(cur_packet, sr);
-                sr_send_packet(sr, new_icmp_packet, icmp_size, cur_packet->iface);
-                cur_packet = cur_packet->next;
-            }
-        }
-        /*try to send arp request*/
-        else{
-            size_t arp_size = sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t);
-            struct sr_if *cur_if = sr->if_list;
-            while(cur_if != NULL){
-                uint8_t *new_arp_packet = generate_arp_request(req, cur_if);
-                sr_send_packet(sr, new_arp_packet, arp_size, cur_if->name);
-                cur_if = cur_if->next;
-            }
-            req->sent = time(NULL);
-            req->times_sent++;
-        }
-    }
-}
-
-
 /* 
   This function gets called every second. For each request sent out, we keep
   checking whether we should resend an request or destroy the arp request.
   See the comments in the header file for an idea of what it should look like.
 */
-void sr_arpcache_sweepreqs(struct sr_instance *sr) { 
-    /* Fill this in */
-    struct sr_arpcache *arpcache = &(sr->cache);
-    struct sr_arpreq *req= arpcache->requests;
-    while(req != NULL){
-        handle_arpreq(req, sr);
+void sr_arpcache_sweepreqs(struct sr_instance *sr) 
+{ 
+  struct sr_arpreq* req = sr->cache.requests;
+    while(req != NULL)
+    {
+        handle_arpreq(sr, req);
         req = req->next;
     }
 }
@@ -363,4 +250,121 @@ void *sr_arpcache_timeout(void *sr_ptr) {
     
     return NULL;
 }
+
+
+int handle_arpreq(struct sr_instance* sr, struct sr_arpreq* req) 
+{
+  printf("Handling Request from queue...\n");
+
+  time_t cur_time = time(NULL);
+  if (difftime(cur_time, req->sent) > 1.0) 
+  {
+    if (req->times_sent >= 5) 
+    {
+      size_t icmp_size = sizeof(sr_arp_hdr_t) + sizeof(sr_ethernet_hdr_t) + sizeof(sr_icmp_t3_hdr_t);
+      struct sr_packet *cur_packet = req->packets;
+      while(cur_packet != NULL)
+      {
+        uint8_t *new_icmp_packet;
+        new_icmp_packet = generate_icmp_message(cur_packet, sr);
+        printf("Sending ICMP (3,1)...\n");
+        sr_send_packet(sr, new_icmp_packet, icmp_size, cur_packet->iface);
+        cur_packet = cur_packet->next;
+      }
+    sr_arpreq_destroy(&(sr->cache), req);        
+    } 
+    else 
+    {
+        size_t arp_size = sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t);
+        struct sr_if* cur_if = sr_get_interface(sr, req->iface);
+        uint8_t *new_arp_packet = generate_arp_request(req, cur_if);
+        printf("Sending routine ARP Request from handle_arpreq...\n");
+        sr_send_packet(sr, new_arp_packet, arp_size, cur_if->name);
+        req->sent = time(NULL);
+        req->times_sent++;
+        free(new_arp_packet);
+    }
+  }
+return 0;
+}
+
+/*
+Generate ICMP packet
+*/
+uint8_t *generate_icmp_message(struct sr_packet *cur_packet, struct sr_instance *sr)
+{
+    size_t packet_size = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t);
+
+    uint8_t *newpacket = (uint8_t*)malloc(packet_size);
+
+    sr_ethernet_hdr_t *new_ethernet_header = (sr_ethernet_hdr_t*)(newpacket);
+    sr_ip_hdr_t* new_ip_header = (sr_ip_hdr_t*)(newpacket + sizeof(sr_ethernet_hdr_t));
+    sr_icmp_t3_hdr_t *new_icmp_header = (sr_icmp_t3_hdr_t*)(newpacket + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+
+    /*set up ethernet header*/
+
+    sr_ethernet_hdr_t *req_ether_header = (sr_ethernet_hdr_t*)(cur_packet->buf); /*ethernet header from buffer*/
+    memcpy(new_ethernet_header->ether_shost, sr_get_interface(sr, cur_packet->iface)->addr, 6);
+    memcpy(new_ethernet_header->ether_dhost, req_ether_header->ether_shost, 6);
+    new_ethernet_header->ether_type = htons(ethertype_ip);
+
+    /*set up ip header*/
+    sr_ip_hdr_t *req_ip_header = (sr_ip_hdr_t*)(cur_packet->buf + sizeof(sr_ethernet_hdr_t)); /*ipv4 header from buffer*/
+    new_ip_header->ip_hl = 5; /*minimum value is 5*/
+    new_ip_header->ip_v = 4;
+    new_ip_header->ip_tos = req_ip_header->ip_tos;
+    new_ip_header->ip_len = htons(sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+    new_ip_header->ip_off = 0; /*no fragment*/
+    new_ip_header->ip_ttl = 64; /* recommanded initial value for TTL */
+    new_ip_header->ip_p = ip_protocol_icmp;
+    new_ip_header->ip_p = 0;
+    new_ip_header->ip_sum = 0;
+    new_ip_header->ip_src = sr_get_interface(sr,cur_packet->iface)->ip;
+    new_ip_header->ip_dst = req_ip_header->ip_src;
+    new_ip_header->ip_sum = cksum(newpacket + sizeof(sr_ethernet_hdr_t), sizeof(sr_ip_hdr_t));
+
+    /*set up type 3 icmp header*/
+
+    new_icmp_header->icmp_type = 3;
+    new_icmp_header->icmp_code = 1;
+    new_icmp_header->icmp_sum = 0;
+    new_icmp_header->next_mtu = 0;
+
+    /*we need IP header and first 8 bytes of original datagram's data*/
+
+    memcpy(new_icmp_header->data, (uint8_t *)req_ip_header, sizeof(sr_ip_hdr_t));
+    memcpy((new_icmp_header->data + sizeof(sr_ip_hdr_t)), (newpacket + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t)), 8);
+    new_icmp_header->icmp_sum = cksum(new_icmp_header->data + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t), sizeof(sr_icmp_t3_hdr_t));
+    return newpacket;
+}
+
+
+/*
+Generate arp request and return a new packet
+*/
+uint8_t *generate_arp_request(struct sr_arpreq *req, struct sr_if* cur_if)
+{
+    size_t packet_size = sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t);
+    uint8_t *newpacket = malloc(packet_size);
+    sr_ethernet_hdr_t *new_ethernet_header = (sr_ethernet_hdr_t*)(newpacket);
+    sr_arp_hdr_t *new_arp_header = (sr_arp_hdr_t*)(newpacket + sizeof(sr_ethernet_hdr_t));
+    /*set ethernet header*/
+    memcpy(new_ethernet_header->ether_shost, cur_if->addr, ETHER_ADDR_LEN);
+    uint8_t broadcast_addr[ETHER_ADDR_LEN] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+    memcpy(new_ethernet_header->ether_dhost, broadcast_addr, ETHER_ADDR_LEN);
+    new_ethernet_header->ether_type = htons(ethertype_arp);
+    /*set arp header*/
+    new_arp_header->ar_hrd = htons(arp_hrd_ethernet);
+    new_arp_header->ar_pro = htons(ethertype_ip);
+    new_arp_header->ar_hln = ETHER_ADDR_LEN; /*mac address length*/
+    new_arp_header->ar_pln = 4; /*ip address length( 4 for IPv4)*/
+    new_arp_header->ar_op = htons(arp_op_request);
+    memcpy(new_arp_header->ar_sha, cur_if->addr, ETHER_ADDR_LEN); /*sender hw address*/
+    new_arp_header->ar_sip = cur_if->ip;
+    memcpy(new_arp_header->ar_tha, broadcast_addr, ETHER_ADDR_LEN); /*target hw address*/
+    new_arp_header->ar_tip = req->ip;
+    /*DONE!*/
+    return newpacket;
+}
+
 

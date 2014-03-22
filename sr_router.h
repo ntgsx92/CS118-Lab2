@@ -91,10 +91,5 @@ void process_ether_type_arp(struct sr_instance* sr,
         unsigned int len,
         char* iface/* lent */);
 
-void sr_handle_arpreq(struct sr_instance* sr, struct sr_arpreq* req);
-
-struct sr_rt* table_lookup(struct sr_instance* sr, uint32_t ip_dst);
-
-struct sr_if* sr_find_interface(struct sr_instance* sr, uint32_t ip_dst);
 
 #endif /* SR_ROUTER_H */

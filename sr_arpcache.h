@@ -70,6 +70,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "sr_if.h"
+#include "sr_utils.h"   
 
 #define SR_ARPCACHE_SZ    100  
 #define SR_ARPCACHE_TO    15.0
@@ -96,6 +97,7 @@ struct sr_arpreq {
     uint32_t times_sent;        /* Number of times this request was sent. You 
                                    should update this. */
     struct sr_packet *packets;  /* List of pkts waiting on this req to finish */
+    char *iface; 
     struct sr_arpreq *next;
 };
 
@@ -146,5 +148,9 @@ void sr_arpcache_dump(struct sr_arpcache *cache);
 int   sr_arpcache_init(struct sr_arpcache *cache);
 int   sr_arpcache_destroy(struct sr_arpcache *cache);
 void *sr_arpcache_timeout(void *cache_ptr);
+
+int handle_arpreq(struct sr_instance* sr, struct sr_arpreq* req);
+uint8_t *generate_icmp_message(struct sr_packet *cur_packet, struct sr_instance *sr);
+uint8_t *generate_arp_request(struct sr_arpreq *req, struct sr_if* cur_if);
 
 #endif
